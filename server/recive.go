@@ -3,29 +3,25 @@ package main
 import (
 	"fmt"
 	"log"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
-	failOnError(err, "Failed to connect to RabbitMQ")
-	defer conn.Close()
+	err := consumeMessages()
+	if err != nil {
+		log.Fatalf("Error while consuming messages: %s", err)
+	}
+}
 
-	ch, err := conn.Channel()
-	failOnError(err, "Failed to open a channel")
+func consumeMessages() error {
+	conn, ch, q, err := setupRabbitMQ()
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
 	defer ch.Close()
 
-	q, err := ch.QueueDeclare(
-		"hello", // name
-		false,   // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
 	msgs, err := ch.Consume(
 		q.Name, // queue
 		"",     // consumer
@@ -35,23 +31,49 @@ func main() {
 		false,  // no-wait
 		nil,    // args
 	)
-	failOnError(err, "Failed to register a consumer")
+	if err != nil {
+		return fmt.Errorf("failed to register a consumer: %w", err)
+	}
 
-	var forever chan struct{}
-
+	forever := make(chan struct{})
 	go func() {
 		for d := range msgs {
-			time := time.Now()
-			fmt.Println("this is the time :", time)
-			log.Printf("Received a message: %s", d.Body)
+			handleMessage(d)
 		}
 	}()
 
 	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
 	<-forever
+
+	return nil
 }
-func failOnError(err error, msg string) {
+
+func setupRabbitMQ() (*amqp.Connection, *amqp.Channel, amqp.Queue, error) {
+	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	if err != nil {
-		log.Panicf("%s: %s", msg, err)
+		return nil, nil, amqp.Queue{}, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
+
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, nil, amqp.Queue{}, fmt.Errorf("failed to open a channel: %w", err)
+	}
+
+	q, err := ch.QueueDeclare(
+		"hello", // name
+		false,   // durable
+		false,   // delete when unused
+		false,   // exclusive
+		false,   // no-wait
+		nil,     // arguments
+	)
+	if err != nil {
+		return nil, nil, amqp.Queue{}, fmt.Errorf("failed to declare a queue: %w", err)
+	}
+
+	return conn, ch, q, nil
+}
+
+func handleMessage(d amqp.Delivery) {
+	log.Printf("Received a message: %s", d.Body)
 }
